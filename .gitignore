@@ -1,0 +1,4 @@
+/build/
+/minidumps/
+/.xmake/
+/.cache/
