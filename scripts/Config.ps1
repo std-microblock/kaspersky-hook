@@ -2,7 +2,7 @@ $VMName = "vm1"
 $LocalDest = "./minidumps"
 $User = "RobotAdmin"
 $Pass = "Passw0rd1231"
-$DriverName = "example-driver"
+$DriverName = "kaspersky-hook"
 
 $SecPass = ConvertTo-SecureString $Pass -AsPlainText -Force
 $Cred = New-Object System.Management.Automation.PSCredential($User, $SecPass)

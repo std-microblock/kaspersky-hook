@@ -8,10 +8,10 @@
 #define LOG_ERR(fmt, ...)  DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, \
                                       LOG_FORMAT(fmt), __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
 
-#define LOG_WARN(fmt, ...) DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, \
+#define LOG_WARN(fmt, ...) DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, \
                                       LOG_FORMAT(fmt), __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
 
-#define LOG_INFO(fmt, ...) DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, \
+#define LOG_INFO(fmt, ...) DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, \
                                       LOG_FORMAT(fmt), __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
 
 #ifdef DBG
