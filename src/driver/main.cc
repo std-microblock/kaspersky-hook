@@ -15,6 +15,62 @@ UNICODE_STRING g_symbolic_link = {};
 bool g_symbolic_link_created = false;
 
 //
+// Hook globals
+//
+using NtCreateFile_t = NTSTATUS (*)(
+    PHANDLE FileHandle,
+    ACCESS_MASK DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    PLARGE_INTEGER AllocationSize,
+    ULONG FileAttributes,
+    ULONG ShareAccess,
+    ULONG CreateDisposition,
+    ULONG CreateOptions,
+    PVOID EaBuffer,
+    ULONG EaLength);
+
+ssdt::SsdtHook* g_create_file_hook = nullptr;
+NtCreateFile_t g_original_create_file = nullptr;
+
+//
+// Hook routine
+//
+EXTERN_C NTSTATUS HookNtCreateFile(
+    PHANDLE FileHandle,
+    ACCESS_MASK DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    PLARGE_INTEGER AllocationSize,
+    ULONG FileAttributes,
+    ULONG ShareAccess,
+    ULONG CreateDisposition,
+    ULONG CreateOptions,
+    PVOID EaBuffer,
+    ULONG EaLength) {
+
+    if (ObjectAttributes && ObjectAttributes->ObjectName &&
+        ObjectAttributes->ObjectName->Buffer) {
+        static const UNICODE_STRING kBlockedName =
+            RTL_CONSTANT_STRING(L"blook_test_hook_createfile.txt");
+
+        if (RtlSuffixUnicodeString(&kBlockedName, ObjectAttributes->ObjectName,
+                                   TRUE)) {
+            if (IoStatusBlock) {
+                IoStatusBlock->Status = STATUS_ACCESS_DENIED;
+                IoStatusBlock->Information = 0;
+            }
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
+    return g_original_create_file(FileHandle, DesiredAccess, ObjectAttributes,
+                                  IoStatusBlock, AllocationSize, FileAttributes,
+                                  ShareAccess, CreateDisposition, CreateOptions,
+                                  EaBuffer, EaLength);
+}
+
+//
 // Forward declarations
 //
 DRIVER_UNLOAD DriverUnload;
@@ -114,6 +170,12 @@ void Cleanup() {
         manager.unhook_all();
     }
 
+    g_create_file_hook = nullptr;
+    g_original_create_file = nullptr;
+
+    // Free cached syscall images
+    core::unload_syscall_images();
+
     // Delete symbolic link
     if (g_symbolic_link_created) {
         IoDeleteSymbolicLink(&g_symbolic_link);
@@ -185,6 +247,36 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT driver,
     if (!init_result) {
         log("Failed to initialize SSDT hook manager: %s",
             core::error_to_string(init_result.error()));
+        Cleanup();
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    // Hook NtCreateFile to block a specific filename
+    auto hook_result = manager.hook_by_syscall_name(
+        "NtCreateFile", reinterpret_cast<void*>(&HookNtCreateFile),
+        ssdt::HookType::Ssdt);
+
+    if (!hook_result) {
+        log("Failed to create NtCreateFile hook: %s",
+            core::error_to_string(hook_result.error()));
+        Cleanup();
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    g_create_file_hook = hook_result.value();
+    g_original_create_file =
+        g_create_file_hook->get_original<NtCreateFile_t>();
+
+    if (!g_original_create_file) {
+        log("Failed to resolve original NtCreateFile");
+        Cleanup();
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    auto enable_result = g_create_file_hook->enable();
+    if (!enable_result) {
+        log("Failed to enable NtCreateFile hook: %s",
+            core::error_to_string(enable_result.error()));
         Cleanup();
         return STATUS_UNSUCCESSFUL;
     }

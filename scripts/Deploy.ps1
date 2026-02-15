@@ -8,6 +8,8 @@ $DriverPath = "$BuildOutputDir\$DriverName.sys"
 $KlhkPath = ".\src\klhk.sys"
 $DestPath = "C:\"
 
+sc.exe stop $DriverName 2>$null | Out-Null
+
 # Copy driver files to C:\
 Write-Host ">>> Copying driver files..." -ForegroundColor Yellow
 Copy-Item -Path $DriverPath -Destination "$DestPath$DriverName.sys" -Force

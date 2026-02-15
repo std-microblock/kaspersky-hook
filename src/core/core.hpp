@@ -7,6 +7,7 @@
 #include "error.hpp"
 #include "expected.hpp"
 #include "pe.hpp"
+#include "syscall.hpp"
 #include "utils.hpp"
 
 //

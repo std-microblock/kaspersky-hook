@@ -101,6 +101,12 @@ public:
         unsigned short index,
         void* hook_fn,
         HookType type = HookType::Ssdt);
+
+    // Hook by syscall name (returns a disabled hook that must be enabled)
+    [[nodiscard]] core::Result<SsdtHook*> hook_by_syscall_name(
+        const char* syscall_name,
+        void* hook_fn,
+        HookType type = HookType::Ssdt);
     
     // Check if an index is already hooked
     [[nodiscard]] bool is_hooked(unsigned short index, HookType type = HookType::Ssdt) const;
