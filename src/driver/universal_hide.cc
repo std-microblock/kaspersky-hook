@@ -1,4 +1,4 @@
-#include "hide.hpp"
+#include "universal_hide.hpp"
 
 #include <winscard.h>
 #include <ntifs.h>
