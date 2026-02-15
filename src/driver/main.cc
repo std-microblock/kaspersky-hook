@@ -2,8 +2,10 @@
 #include <windef.h>
 
 #include "core/core.hpp"
+#include "hide.hpp"
 #include "ipc/protocol.hpp"
 #include "ssdt/ssdt.hpp"
+
 
 // Driver globals
 PDEVICE_OBJECT g_device_object = nullptr;
@@ -219,6 +221,14 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT driver,
     if (auto enable_result = create_file_hook.enable(); !enable_result) {
         log("Failed to enable NtCreateFile hook: %s",
             core::error_to_string(enable_result.error()));
+        Cleanup();
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    // Register hide hooks
+    if (auto res = hide::register_hooks(); !res) {
+        log("Failed to register hide hooks: %s",
+            core::error_to_string(res.error()));
         Cleanup();
         return STATUS_UNSUCCESSFUL;
     }
