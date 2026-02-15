@@ -1,6 +1,7 @@
 #include "hide.hpp"
 
 #include <winscard.h>
+#include <ntifs.h>
 
 #include "core/core.hpp"
 #include "core/expected.hpp"
@@ -11,6 +12,36 @@ extern "C" {
 // PsIsProtectedProcess
 NTSYSAPI BOOLEAN NTAPI PsIsProtectedProcess(PEPROCESS Process);
 }
+
+// Minimal kernel-internal structures used for enumerating and patching
+// object manager callback lists. These are intentionally limited to the
+// fields we need here and placed at file scope to avoid leaking them
+// into headers.
+
+typedef struct _OBJECT_TYPE {
+    LIST_ENTRY TypeList;
+    UNICODE_STRING Name;
+    VOID* DefaultObject;
+    UCHAR Index;
+    unsigned __int32 TotalNumberOfObjects;
+    unsigned __int32 TotalNumberOfHandles;
+    unsigned __int32 HighWaterNumberOfObjects;
+    unsigned __int32 HighWaterNumberOfHandles;
+    char TypeInfo[0x78];
+    EX_PUSH_LOCK TypeLock;
+    unsigned __int32 Key;
+    LIST_ENTRY CallbackList;
+} OBJECT_TYPE, *POBJECT_TYPE;
+
+typedef struct _CALLBACK_ENTRY_ITEM {
+    LIST_ENTRY EntryItemList;
+    OB_OPERATION Operations;
+    struct _CALLBACK_ENTRY* CallbackEntry;
+    POBJECT_TYPE ObjectType;
+    POB_PRE_OPERATION_CALLBACK PreOperation;
+    POB_POST_OPERATION_CALLBACK PostOperation;
+    __int64 unk;
+} CALLBACK_ENTRY_ITEM, *PCALLBACK_ENTRY_ITEM;
 
 namespace hide {
 
@@ -220,6 +251,99 @@ bool IsBlacklistedProcessEx(PEPROCESS Process) {
     }
     return bResult;
 }
+
+// --- OB callback patching helpers ------------------------------------------------
+
+struct ObCallbackBackup {
+    PCALLBACK_ENTRY_ITEM Entry;
+    POB_PRE_OPERATION_CALLBACK OldPre;
+    POB_POST_OPERATION_CALLBACK OldPost;
+};
+
+static OB_PREOP_CALLBACK_STATUS ObPreOpStub(PVOID RegistrationContext,
+                                            POB_PRE_OPERATION_INFORMATION OpInfo) {
+    UNREFERENCED_PARAMETER(RegistrationContext);
+    UNREFERENCED_PARAMETER(OpInfo);
+    return (OB_PREOP_CALLBACK_STATUS)0; /* continue */
+}
+
+static void ObPostOpStub(PVOID RegistrationContext,
+                         POB_POST_OPERATION_INFORMATION OpInfo) {
+    UNREFERENCED_PARAMETER(RegistrationContext);
+    UNREFERENCED_PARAMETER(OpInfo);
+}
+
+// Patch every callback entry in `objType->CallbackList` to point at the provided
+// stubs. Returns an allocated array of ObCallbackBackup (must be freed by the
+// caller with ExFreePool) and sets outCount. Returns nullptr on failure.
+static ObCallbackBackup* PatchObjectTypeCallbacks(POBJECT_TYPE objType,
+                                                  POB_PRE_OPERATION_CALLBACK stubPre,
+                                                  POB_POST_OPERATION_CALLBACK stubPost,
+                                                  SIZE_T* outCount) {
+    if (!objType || !outCount)
+        return nullptr;
+
+    PLIST_ENTRY pHead = &objType->CallbackList;
+    PLIST_ENTRY pEntry = pHead->Flink;
+    SIZE_T count = 0;
+
+    // first pass: count entries
+    while (pEntry != pHead) {
+        ++count;
+        pEntry = pEntry->Flink;
+    }
+
+    if (count == 0) {
+        *outCount = 0;
+        return nullptr;
+    }
+
+    ObCallbackBackup* backups = (ObCallbackBackup*)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(ObCallbackBackup) * count, 'cbkH');
+    if (!backups) {
+        *outCount = 0;
+        return nullptr;
+    }
+
+    RtlZeroMemory(backups, sizeof(ObCallbackBackup) * count);
+
+    // second pass: replace and save
+    SIZE_T idx = 0;
+    pEntry = pHead->Flink;
+    while (pEntry != pHead && idx < count) {
+        PCALLBACK_ENTRY_ITEM cItem =
+            CONTAINING_RECORD(pEntry, CALLBACK_ENTRY_ITEM, EntryItemList);
+
+        backups[idx].Entry = cItem;
+        backups[idx].OldPre = cItem->PreOperation;
+        backups[idx].OldPost = cItem->PostOperation;
+
+        // replace with stubs
+        cItem->PreOperation = stubPre;
+        cItem->PostOperation = stubPost;
+
+        ++idx;
+        pEntry = pEntry->Flink;
+    }
+
+    *outCount = idx;
+    return backups;
+}
+
+static void RestoreObjectTypeCallbacks(ObCallbackBackup* backups, SIZE_T count) {
+    if (!backups || count == 0)
+        return;
+
+    for (SIZE_T i = 0; i < count; ++i) {
+        PCALLBACK_ENTRY_ITEM entry = backups[i].Entry;
+        if (!entry)
+            continue;
+        entry->PreOperation = backups[i].OldPre;
+        entry->PostOperation = backups[i].OldPost;
+    }
+}
+
+// --------------------------------------------------------------------------------
 }  // namespace tools
 
 // Hooks implementation using SsdtHookManager
@@ -229,7 +353,7 @@ core::VoidResult register_hooks() {
 
     // NtOpenProcess
     auto result_open = manager.hook_by_syscall_name("NtOpenProcess");
-    ASSERT_TRUE_ERR(result_open, NotFound);
+    ASSERT_TRUE_OR_ERR(result_open, NotFound);
     static auto& open_hook = result_open.value();
     open_hook << [](PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess,
                     POBJECT_ATTRIBUTES ObjectAttributes,
@@ -237,8 +361,40 @@ core::VoidResult register_hooks() {
         auto original = open_hook.get_original<NtOpenProcess>();
 
         if (tools::IsProtectedProcess(PsGetCurrentProcessId())) {
-            return original(ProcessHandle, DesiredAccess, ObjectAttributes,
-                            ClientId);
+            // For protected callers: temporarily replace all OB callbacks
+            // (both Process and Thread object types) with no-op stubs, call
+            // the original NtOpenProcess, then restore the callbacks.
+            SIZE_T procCount = 0, threadCount = 0;
+            auto* procBackups = (tools::ObCallbackBackup*)nullptr;
+            auto* threadBackups = (tools::ObCallbackBackup*)nullptr;
+
+            POBJECT_TYPE pProcType = *PsProcessType;
+            POBJECT_TYPE pThreadType = *PsThreadType;
+
+            if (pProcType)
+                procBackups = tools::PatchObjectTypeCallbacks(pProcType,
+                                                             tools::ObPreOpStub,
+                                                             tools::ObPostOpStub,
+                                                             &procCount);
+            if (pThreadType)
+                threadBackups = tools::PatchObjectTypeCallbacks(pThreadType,
+                                                                tools::ObPreOpStub,
+                                                                tools::ObPostOpStub,
+                                                                &threadCount);
+
+            NTSTATUS status = original(ProcessHandle, DesiredAccess,
+                                       ObjectAttributes, ClientId);
+
+            if (procBackups) {
+                tools::RestoreObjectTypeCallbacks(procBackups, procCount);
+                ExFreePool(procBackups);
+            }
+            if (threadBackups) {
+                tools::RestoreObjectTypeCallbacks(threadBackups, threadCount);
+                ExFreePool(threadBackups);
+            }
+
+            return status;
         } else {
             NTSTATUS status = original(ProcessHandle, DesiredAccess,
                                        ObjectAttributes, ClientId);
@@ -255,12 +411,12 @@ core::VoidResult register_hooks() {
             return status;
         }
     };
-    ASSERT_TRUE_ERR(open_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(open_hook.enable(), HookFailed);
 
     // NtQuerySystemInformation
     auto result_query =
         manager.hook_by_syscall_name("NtQuerySystemInformation");
-    ASSERT_TRUE_ERR(result_query, NotFound);
+    ASSERT_TRUE_OR_ERR(result_query, NotFound);
     static auto& query_hook = result_query.value();
     query_hook << [](SYSTEM_INFORMATION_CLASS SystemInformationClass,
                      PVOID Buffer, ULONG Length,
@@ -327,11 +483,11 @@ core::VoidResult register_hooks() {
         }
         return status;
     };
-    ASSERT_TRUE_ERR(query_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(query_hook.enable(), HookFailed);
 
     // NtWriteVirtualMemory
     auto result_write = manager.hook_by_syscall_name("NtWriteVirtualMemory");
-    ASSERT_TRUE_ERR(result_write, NotFound);
+    ASSERT_TRUE_OR_ERR(result_write, NotFound);
     static auto& write_hook = result_write.value();
     write_hook << [](HANDLE ProcessHandle, PVOID BaseAddress, PVOID Buffer,
                      SIZE_T NumberOfBytesToWrite,
@@ -371,11 +527,11 @@ core::VoidResult register_hooks() {
         }
         return res;
     };
-    ASSERT_TRUE_ERR(write_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(write_hook.enable(), HookFailed);
 
     // NtAllocateVirtualMemory
     auto result_alloc = manager.hook_by_syscall_name("NtAllocateVirtualMemory");
-    ASSERT_TRUE_ERR(result_alloc, NotFound);
+    ASSERT_TRUE_OR_ERR(result_alloc, NotFound);
     static auto& alloc_hook = result_alloc.value();
     alloc_hook << [](HANDLE ProcessHandle, PVOID* BaseAddress,
                      ULONG_PTR ZeroBits, PSIZE_T RegionSize,
@@ -417,11 +573,11 @@ core::VoidResult register_hooks() {
         }
         return res;
     };
-    ASSERT_TRUE_ERR(alloc_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(alloc_hook.enable(), HookFailed);
 
     // NtFreeVirtualMemory
     auto result_free = manager.hook_by_syscall_name("NtFreeVirtualMemory");
-    ASSERT_TRUE_ERR(result_free, NotFound);
+    ASSERT_TRUE_OR_ERR(result_free, NotFound);
     static auto& free_hook = result_free.value();
     free_hook << [](HANDLE ProcessHandle, PVOID* BaseAddress,
                     PSIZE_T RegionSize, ULONG FreeType) -> NTSTATUS {
@@ -463,11 +619,11 @@ core::VoidResult register_hooks() {
         }
         return res;
     };
-    ASSERT_TRUE_ERR(free_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(free_hook.enable(), HookFailed);
 
     // NtLoadDriver - allow filtering if needed
     auto result_load = manager.hook_by_syscall_name("NtLoadDriver");
-    ASSERT_TRUE_ERR(result_load, NotFound);
+    ASSERT_TRUE_OR_ERR(result_load, NotFound);
     static auto& load_hook = result_load.value();
     load_hook << [](PUNICODE_STRING DriverServiceName) -> NTSTATUS {
         bool bLoad = true;
@@ -487,12 +643,12 @@ core::VoidResult register_hooks() {
                 DriverServiceName ? DriverServiceName->Buffer : L"(null)");
         return ret;
     };
-    ASSERT_TRUE_ERR(load_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(load_hook.enable(), HookFailed);
 
     // Shadow-SSDT (win32k) hooks for window enumeration / foreground handling
     auto result_win_from_point = manager.hook_by_syscall_name(
         "NtUserWindowFromPoint", ssdt::HookType::ShadowSsdt);
-    ASSERT_TRUE_ERR(result_win_from_point, NotFound);
+    ASSERT_TRUE_OR_ERR(result_win_from_point, NotFound);
     static auto& winfp_hook = result_win_from_point.value();
     winfp_hook << [](POINT p) -> HWND {
         auto original = winfp_hook.get_original<NtUserWindowFromPoint>();
@@ -504,11 +660,11 @@ core::VoidResult register_hooks() {
             return res;
         return 0;
     };
-    ASSERT_TRUE_ERR(winfp_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(winfp_hook.enable(), HookFailed);
 
     auto result_qwindow = manager.hook_by_syscall_name(
         "NtUserQueryWindow", ssdt::HookType::ShadowSsdt);
-    ASSERT_TRUE_ERR(result_qwindow, HookFailed);
+    ASSERT_TRUE_OR_ERR(result_qwindow, HookFailed);
 
     static auto& qwin_hook = result_qwindow.value();
     qwin_hook <<
@@ -526,11 +682,11 @@ core::VoidResult register_hooks() {
             return 0;
         return res;
     };
-    ASSERT_TRUE_ERR(qwin_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(qwin_hook.enable(), HookFailed);
 
     auto result_findwnd = manager.hook_by_syscall_name(
         "NtUserFindWindowEx", ssdt::HookType::ShadowSsdt);
-    ASSERT_TRUE_ERR(result_findwnd, HookFailed);
+    ASSERT_TRUE_OR_ERR(result_findwnd, HookFailed);
     static auto& find_hook = result_findwnd.value();
     find_hook << [](HWND hWndParent, HWND hWndChildAfter,
                     PUNICODE_STRING lpszClass, PUNICODE_STRING lpszWindow,
@@ -551,11 +707,11 @@ core::VoidResult register_hooks() {
         }
         return res;
     };
-    ASSERT_TRUE_ERR(find_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(find_hook.enable(), HookFailed);
 
     auto result_build = manager.hook_by_syscall_name(
         "NtUserBuildHwndList", ssdt::HookType::ShadowSsdt);
-    ASSERT_TRUE_ERR(result_build, HookFailed);
+    ASSERT_TRUE_OR_ERR(result_build, HookFailed);
     static auto& build_hook = result_build.value();
 
     build_hook << [](HANDLE DesktopHandle, HWND StartWindowHandle,
@@ -601,12 +757,12 @@ core::VoidResult register_hooks() {
         }
         return res;
     };
-    ASSERT_TRUE_ERR(build_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(build_hook.enable(), HookFailed);
 
     // NtUserGetForegroundWindow
     auto result_fg = manager.hook_by_syscall_name("NtUserGetForegroundWindow",
                                                   ssdt::HookType::ShadowSsdt);
-    ASSERT_TRUE_ERR(result_fg, HookFailed);
+    ASSERT_TRUE_OR_ERR(result_fg, HookFailed);
     static auto& fg_hook = result_fg.value();
     static HWND LastForeWnd = HWND(-1);
     fg_hook << [](VOID) -> HWND {
@@ -626,7 +782,7 @@ core::VoidResult register_hooks() {
 
         return res;
     };
-    ASSERT_TRUE_ERR(fg_hook.enable(), HookFailed);
+    ASSERT_TRUE_OR_ERR(fg_hook.enable(), HookFailed);
 
     return core::ok();
 }
