@@ -27,8 +27,8 @@ constexpr size_t kMaxMonitoredProcesses = 16;
 namespace names {
 
 inline const wchar_t* target[] = {
-    L"test_app.exe",    L"al-khaser_x64.exe", L"Arknights.exe",
-    L"helldivers2.exe", L"GameMon.des",       L"GameMon64.des",
+    L"test_app.exe", L"al-khaser_x64.exe", L"helldivers2.exe",
+    L"GameMon.des",  L"GameMon64.des",
 };
 
 inline const wchar_t* hidden[] = {
@@ -37,6 +37,7 @@ inline const wchar_t* hidden[] = {
     L"x64dbg.exe",
     L"windbg.exe",
     L"SystemInformer.exe",
+    L"frida.exe",
 };
 
 inline const wchar_t* monitored[] = {
@@ -49,9 +50,7 @@ inline const char* hidden_drivers[] = {
 
 }  // namespace names
 
-// --------------------------------------------------------------------------
 // Process name resolution helpers
-// --------------------------------------------------------------------------
 
 // Resolve a process image name from PID. Caller must call free_name() after.
 bool get_name_by_pid(HANDLE pid, PUNICODE_STRING out);
@@ -62,9 +61,7 @@ bool get_name_by_eprocess(PEPROCESS process, PUNICODE_STRING out);
 // Free a UNICODE_STRING buffer allocated by get_name_*.
 void free_name(PUNICODE_STRING str);
 
-// --------------------------------------------------------------------------
 // Classification queries — by PID
-// --------------------------------------------------------------------------
 bool is_target(HANDLE pid);
 bool is_hidden(HANDLE pid);
 bool is_monitored(HANDLE pid);
@@ -80,23 +77,17 @@ inline bool is_monitored(ULONG_PTR pid) {
     return is_monitored(reinterpret_cast<HANDLE>(pid));
 }
 
-// --------------------------------------------------------------------------
 // Classification queries — by PEPROCESS
-// --------------------------------------------------------------------------
 bool is_target(PEPROCESS process);
 bool is_hidden(PEPROCESS process);
 bool is_monitored(PEPROCESS process);
 
-// --------------------------------------------------------------------------
 // Classification queries — by raw name buffer
-// --------------------------------------------------------------------------
 bool is_target(PWCH name_buffer);
 bool is_hidden(PWCH name_buffer);
 bool is_monitored(PWCH name_buffer);
 
-// --------------------------------------------------------------------------
 // Convenience: check if the *current* process is a target/hidden/monitored
-// --------------------------------------------------------------------------
 inline bool current_is_target() {
     return is_target(PsGetCurrentProcessId());
 }
@@ -109,9 +100,7 @@ inline bool current_is_monitored() {
     return is_monitored(PsGetCurrentProcessId());
 }
 
-// --------------------------------------------------------------------------
 // Convenience: check current process via EPROCESS (avoids PID lookup)
-// --------------------------------------------------------------------------
 inline bool current_is_target_ex() {
     return is_target(PsGetCurrentProcess());
 }

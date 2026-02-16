@@ -25,7 +25,7 @@ if (-not (Test-Path $regPath)) {
 }
 New-ItemProperty -Path $regPath -Name "UseHvm" -Value 1 -PropertyType DWord -Force | Out-Null
 # Delete FailSafe registry directory to avoid the driver refusing to load.
-Remove-Item -Path "$regPath\FailSafe" -Recurse -Force | Out-Null
+Remove-Item -Path "$regPath\FailSafe" -Recurse -Force -ErrorAction SilentlyContinue
 
 # Create driver service
 Write-Host ">>> Configuring $DriverName service..." -ForegroundColor Yellow

@@ -7,9 +7,7 @@
 #include "process_manager.hpp"
 #include "ssdt/ssdt_hook.hpp"
 
-// --------------------------------------------------------------------------
 // Extra structures not provided by Veil or the WDK headers we include
-// --------------------------------------------------------------------------
 
 // ObjectTypesInformation returns this header followed by variable-length
 // OBJECT_TYPE_INFORMATION entries. We only need the count; entries are
@@ -30,11 +28,10 @@ typedef struct _JOBOBJECT_BASIC_PROCESS_ID_LIST_LOCAL {
     ULONG NumberOfAssignedProcesses;
     ULONG NumberOfProcessIdsInList;
     ULONG_PTR ProcessIdList[1];
-} JOBOBJECT_BASIC_PROCESS_ID_LIST_LOCAL, *PJOBOBJECT_BASIC_PROCESS_ID_LIST_LOCAL;
+} JOBOBJECT_BASIC_PROCESS_ID_LIST_LOCAL,
+    *PJOBOBJECT_BASIC_PROCESS_ID_LIST_LOCAL;
 
-// --------------------------------------------------------------------------
 // Helpers
-// --------------------------------------------------------------------------
 
 namespace {
 
@@ -86,9 +83,7 @@ PEPROCESS pid_to_eprocess(HANDLE pid) {
 
 }  // anonymous namespace
 
-// --------------------------------------------------------------------------
 // Hook registration
-// --------------------------------------------------------------------------
 
 namespace debugger_hide {
 
@@ -97,9 +92,7 @@ core::VoidResult register_hooks() {
 
     auto& mgr = ssdt::SsdtHookManager::instance();
 
-    // ======================================================================
     // NtQueryInformationProcess
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtQueryInformationProcess");
         ASSERT_TRUE(res, NotFound);
@@ -213,15 +206,12 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtSetInformationThread
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtSetInformationThread");
         ASSERT_TRUE(res, NotFound);
         static auto& hook = res.value();
-        hook << [](HANDLE ThreadHandle,
-                   THREADINFOCLASS ThreadInformationClass,
+        hook << [](HANDLE ThreadHandle, THREADINFOCLASS ThreadInformationClass,
                    PVOID ThreadInformation,
                    ULONG ThreadInformationLength) -> NTSTATUS {
             auto original = hook.get_original<NtSetInformationThread>();
@@ -252,8 +242,7 @@ core::VoidResult register_hooks() {
                     return STATUS_INFO_LENGTH_MISMATCH;
 
                 __try {
-                    auto* ctx =
-                        static_cast<PWOW64_CONTEXT>(ThreadInformation);
+                    auto* ctx = static_cast<PWOW64_CONTEXT>(ThreadInformation);
                     ctx->ContextFlags &= ~0x10u;  // CONTEXT_DEBUG_REGISTERS
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                     return GetExceptionCode();
@@ -269,9 +258,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtSetInformationProcess
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtSetInformationProcess");
         ASSERT_TRUE(res, NotFound);
@@ -301,9 +288,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtQueryObject
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtQueryObject");
         ASSERT_TRUE(res, NotFound);
@@ -313,9 +298,9 @@ core::VoidResult register_hooks() {
                    PVOID ObjectInformation, ULONG ObjectInformationLength,
                    PULONG ReturnLength) -> NTSTATUS {
             auto original = hook.get_original<NtQueryObject>();
-            NTSTATUS status = original(Handle, ObjectInformationClass,
-                                       ObjectInformation,
-                                       ObjectInformationLength, ReturnLength);
+            NTSTATUS status =
+                original(Handle, ObjectInformationClass, ObjectInformation,
+                         ObjectInformationLength, ReturnLength);
 
             if (!process_manager::current_is_target_ex() ||
                 ExGetPreviousMode() != UserMode || !NT_SUCCESS(status) ||
@@ -340,8 +325,7 @@ core::VoidResult register_hooks() {
                 auto* all =
                     static_cast<POBJECT_ALL_INFORMATION>(ObjectInformation);
                 // First OBJECT_TYPE_INFORMATION starts right after the header
-                auto* loc =
-                    reinterpret_cast<PUCHAR>(all + 1);
+                auto* loc = reinterpret_cast<PUCHAR>(all + 1);
 
                 for (ULONG i = 0; i < all->NumberOfObjectsTypes; ++i) {
                     auto* type_info =
@@ -358,9 +342,9 @@ core::VoidResult register_hooks() {
                     // Advance to next OBJECT_TYPE_INFORMATION
                     loc = reinterpret_cast<PUCHAR>(type_info->TypeName.Buffer);
                     loc += type_info->TypeName.MaximumLength;
-                    auto aligned = (reinterpret_cast<ULONG_PTR>(loc) +
-                                    sizeof(PVOID) - 1) &
-                                   ~(sizeof(PVOID) - 1);
+                    auto aligned =
+                        (reinterpret_cast<ULONG_PTR>(loc) + sizeof(PVOID) - 1) &
+                        ~(sizeof(PVOID) - 1);
                     loc = reinterpret_cast<PUCHAR>(aligned);
                 }
             }
@@ -370,17 +354,14 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtSystemDebugControl
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtSystemDebugControl");
         ASSERT_TRUE(res, NotFound);
         static auto& hook = res.value();
         hook << [](SYSDBG_COMMAND Command, PVOID InputBuffer,
                    ULONG InputBufferLength, PVOID OutputBuffer,
-                   ULONG OutputBufferLength,
-                   PULONG ReturnLength) -> NTSTATUS {
+                   ULONG OutputBufferLength, PULONG ReturnLength) -> NTSTATUS {
             auto original = hook.get_original<NtSystemDebugControl>();
 
             if (process_manager::current_is_target_ex() &&
@@ -395,9 +376,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtClose
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtClose");
         ASSERT_TRUE(res, NotFound);
@@ -413,10 +392,11 @@ core::VoidResult register_hooks() {
                                   FALSE, nullptr);
 
             OBJECT_HANDLE_ATTRIBUTE_INFORMATION attr{};
-            NTSTATUS status = ZwQueryObject(
-                Handle,
-                static_cast<OBJECT_INFORMATION_CLASS>(4),  // ObjectDataInformation
-                &attr, sizeof(attr), nullptr);
+            NTSTATUS status =
+                ZwQueryObject(Handle,
+                              static_cast<OBJECT_INFORMATION_CLASS>(
+                                  4),  // ObjectDataInformation
+                              &attr, sizeof(attr), nullptr);
 
             if (status == STATUS_INVALID_HANDLE) {
                 KeReleaseMutex(&g_nt_close_mutex, FALSE);
@@ -434,9 +414,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtQuerySystemInformation
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtQuerySystemInformation");
         ASSERT_TRUE(res, NotFound);
@@ -456,9 +434,8 @@ core::VoidResult register_hooks() {
 
             // -- SystemKernelDebuggerInformation --
             if (SystemInformationClass == SystemKernelDebuggerInformation) {
-                auto* info =
-                    static_cast<PSYSTEM_KERNEL_DEBUGGER_INFORMATION>(
-                        SystemInformation);
+                auto* info = static_cast<PSYSTEM_KERNEL_DEBUGGER_INFORMATION>(
+                    SystemInformation);
                 info->KernelDebuggerEnabled = FALSE;
                 info->KernelDebuggerNotPresent = TRUE;
             }
@@ -480,8 +457,7 @@ core::VoidResult register_hooks() {
             }
 
             // -- SystemCodeIntegrityInformation --
-            else if (SystemInformationClass ==
-                     SystemCodeIntegrityInformation) {
+            else if (SystemInformationClass == SystemCodeIntegrityInformation) {
                 static_cast<PSYSTEM_CODEINTEGRITY_INFORMATION>(
                     SystemInformation)
                     ->CodeIntegrityOptions = 0x01;  // ENABLED
@@ -492,9 +468,8 @@ core::VoidResult register_hooks() {
                      SystemInformationClass ==
                          SystemExtendedProcessInformation ||
                      SystemInformationClass == SystemFullProcessInformation) {
-                filter_process_list(
-                    static_cast<PSYSTEM_PROCESS_INFORMATION>(
-                        SystemInformation));
+                filter_process_list(static_cast<PSYSTEM_PROCESS_INFORMATION>(
+                    SystemInformation));
             }
 
             // -- SystemSessionProcessInformation --
@@ -535,15 +510,14 @@ core::VoidResult register_hooks() {
 
             // -- SystemHandleInformation --
             else if (SystemInformationClass == SystemHandleInformation) {
-                auto* info = static_cast<PSYSTEM_HANDLE_INFORMATION>(
-                    SystemInformation);
+                auto* info =
+                    static_cast<PSYSTEM_HANDLE_INFORMATION>(SystemInformation);
 
                 ULONG write_idx = 0;
                 for (ULONG i = 0; i < info->NumberOfHandles; ++i) {
                     auto* entry = &info->Handles[i];
-                    auto ep = pid_to_eprocess(
-                        reinterpret_cast<HANDLE>(
-                            static_cast<ULONG_PTR>(entry->UniqueProcessId)));
+                    auto ep = pid_to_eprocess(reinterpret_cast<HANDLE>(
+                        static_cast<ULONG_PTR>(entry->UniqueProcessId)));
                     if (ep && process_manager::is_hidden(ep))
                         continue;
                     if (write_idx != i)
@@ -561,8 +535,8 @@ core::VoidResult register_hooks() {
 
             // -- SystemPoolTagInformation: strip our driver tag --
             else if (SystemInformationClass == SystemPoolTagInformation) {
-                auto* info = static_cast<PSYSTEM_POOLTAG_INFORMATION>(
-                    SystemInformation);
+                auto* info =
+                    static_cast<PSYSTEM_POOLTAG_INFORMATION>(SystemInformation);
 
                 ULONG write_idx = 0;
                 for (ULONG i = 0; i < info->Count; ++i) {
@@ -577,8 +551,7 @@ core::VoidResult register_hooks() {
                 if (write_idx < info->Count) {
                     RtlSecureZeroMemory(
                         &info->TagInfo[write_idx],
-                        sizeof(SYSTEM_POOLTAG) *
-                            (info->Count - write_idx));
+                        sizeof(SYSTEM_POOLTAG) * (info->Count - write_idx));
                     info->Count = write_idx;
                 }
             }
@@ -588,9 +561,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtSetContextThread — strip debug registers
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtSetContextThread");
         ASSERT_TRUE(res, NotFound);
@@ -614,9 +585,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtGetContextThread — zero debug registers
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtGetContextThread");
         ASSERT_TRUE(res, NotFound);
@@ -659,15 +628,12 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtQueryInformationThread
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtQueryInformationThread");
         ASSERT_TRUE(res, NotFound);
         static auto& hook = res.value();
-        hook << [](HANDLE ThreadHandle,
-                   THREADINFOCLASS ThreadInformationClass,
+        hook << [](HANDLE ThreadHandle, THREADINFOCLASS ThreadInformationClass,
                    PVOID ThreadInformation, ULONG ThreadInformationLength,
                    PULONG ReturnLength) -> NTSTATUS {
             auto original = hook.get_original<NtQueryInformationThread>();
@@ -715,15 +681,13 @@ core::VoidResult register_hooks() {
                     return STATUS_INFO_LENGTH_MISMATCH;
 
                 __try {
-                    auto* ctx =
-                        static_cast<PWOW64_CONTEXT>(ThreadInformation);
+                    auto* ctx = static_cast<PWOW64_CONTEXT>(ThreadInformation);
                     ULONG original_flags = ctx->ContextFlags;
                     ctx->ContextFlags &= ~0x10u;
 
                     NTSTATUS status = original(
-                        ThreadHandle, ThreadInformationClass,
-                        ThreadInformation, ThreadInformationLength,
-                        ReturnLength);
+                        ThreadHandle, ThreadInformationClass, ThreadInformation,
+                        ThreadInformationLength, ReturnLength);
 
                     if (original_flags & 0x10) {
                         ctx->ContextFlags |= 0x10;
@@ -748,9 +712,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtCreateThreadEx — strip debug-related creation flags
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtCreateThreadEx");
         ASSERT_TRUE(res, NotFound);
@@ -769,19 +731,16 @@ core::VoidResult register_hooks() {
                                  THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE);
             }
 
-            return original(ThreadHandle, DesiredAccess, ObjectAttributes,
-                            ProcessHandle,
-                            reinterpret_cast<PUSER_THREAD_START_ROUTINE>(StartRoutine),
-                            Argument, CreateFlags,
-                            ZeroBits, StackSize, MaximumStackSize,
-                            static_cast<PPS_ATTRIBUTE_LIST>(AttributeList));
+            return original(
+                ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle,
+                reinterpret_cast<PUSER_THREAD_START_ROUTINE>(StartRoutine),
+                Argument, CreateFlags, ZeroBits, StackSize, MaximumStackSize,
+                static_cast<PPS_ATTRIBUTE_LIST>(AttributeList));
         };
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtCreateFile — hide driver file objects
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtCreateFile");
         ASSERT_TRUE(res, NotFound);
@@ -819,9 +778,8 @@ core::VoidResult register_hooks() {
                             UNICODE_STRING uni_drv{};
                             if (NT_SUCCESS(RtlAnsiStringToUnicodeString(
                                     &uni_drv, &ansi_drv, TRUE))) {
-                                if (wcsstr(
-                                        ObjectAttributes->ObjectName->Buffer,
-                                        uni_drv.Buffer)) {
+                                if (wcsstr(ObjectAttributes->ObjectName->Buffer,
+                                           uni_drv.Buffer)) {
                                     RtlFreeUnicodeString(&uni_drv);
                                     ObCloseHandle(*FileHandle, UserMode);
                                     *FileHandle = INVALID_HANDLE_VALUE;
@@ -841,9 +799,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtGetNextProcess — skip hidden processes
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtGetNextProcess");
         ASSERT_TRUE(res, NotFound);
@@ -853,9 +809,9 @@ core::VoidResult register_hooks() {
                    PHANDLE NewProcessHandle) -> NTSTATUS {
             auto original = hook.get_original<NtGetNextProcess>();
 
-            NTSTATUS status = original(ProcessHandle, DesiredAccess,
-                                       HandleAttributes, Flags,
-                                       NewProcessHandle);
+            NTSTATUS status =
+                original(ProcessHandle, DesiredAccess, HandleAttributes, Flags,
+                         NewProcessHandle);
 
             if (!process_manager::current_is_target_ex() ||
                 ExGetPreviousMode() != UserMode || !NT_SUCCESS(status)) {
@@ -885,9 +841,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtOpenProcess — block opening hidden processes
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtOpenProcess");
         ASSERT_TRUE(res, NotFound);
@@ -909,11 +863,9 @@ core::VoidResult register_hooks() {
                         process_manager::is_hidden(ClientId->UniqueProcess)) {
                         // Replace PID with an invalid one so the call fails
                         HANDLE original_pid = ClientId->UniqueProcess;
-                        ClientId->UniqueProcess =
-                            UlongToHandle(0xFFFFFFFCu);
-                        NTSTATUS status =
-                            original(ProcessHandle, DesiredAccess,
-                                     ObjectAttributes, ClientId);
+                        ClientId->UniqueProcess = UlongToHandle(0xFFFFFFFCu);
+                        NTSTATUS status = original(ProcessHandle, DesiredAccess,
+                                                   ObjectAttributes, ClientId);
                         ClientId->UniqueProcess = original_pid;
                         return status;
                     }
@@ -928,9 +880,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtOpenThread — block opening hidden process threads
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtOpenThread");
         ASSERT_TRUE(res, NotFound);
@@ -956,8 +906,7 @@ core::VoidResult register_hooks() {
 
                         if (process_manager::is_hidden(owner)) {
                             HANDLE original_tid = ClientId->UniqueThread;
-                            ClientId->UniqueThread =
-                                UlongToHandle(0xFFFFFFFCu);
+                            ClientId->UniqueThread = UlongToHandle(0xFFFFFFFCu);
                             NTSTATUS status =
                                 original(ThreadHandle, DesiredAccess,
                                          ObjectAttributes, ClientId);
@@ -976,9 +925,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtYieldExecution — always return STATUS_SUCCESS for targets
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtYieldExecution");
         ASSERT_TRUE(res, NotFound);
@@ -995,9 +942,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtQueryInformationJobObject — strip hidden PIDs
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtQueryInformationJobObject");
         ASSERT_TRUE(res, NotFound);
@@ -1006,9 +951,9 @@ core::VoidResult register_hooks() {
                    PVOID JobInformation, ULONG JobInformationLength,
                    PULONG ReturnLength) -> NTSTATUS {
             auto original = hook.get_original<NtQueryInformationJobObject>();
-            NTSTATUS status = original(JobHandle, JobInformationClass,
-                                       JobInformation, JobInformationLength,
-                                       ReturnLength);
+            NTSTATUS status =
+                original(JobHandle, JobInformationClass, JobInformation,
+                         JobInformationLength, ReturnLength);
 
             if (!process_manager::current_is_target_ex() ||
                 !NT_SUCCESS(status) ||
@@ -1038,9 +983,7 @@ core::VoidResult register_hooks() {
         ASSERT_TRUE(hook.enable(), HookFailed);
     }
 
-    // ======================================================================
     // NtContinue — strip debug registers from context
-    // ======================================================================
     {
         auto res = mgr.hook_by_syscall_name("NtContinue");
         ASSERT_TRUE(res, NotFound);
@@ -1069,4 +1012,3 @@ core::VoidResult register_hooks() {
 }
 
 }  // namespace debugger_hide
-

@@ -4,9 +4,7 @@
 
 namespace process_manager {
 
-// --------------------------------------------------------------------------
 // Name resolution
-// --------------------------------------------------------------------------
 
 bool get_name_by_pid(HANDLE pid, PUNICODE_STRING out) {
     PEPROCESS process = nullptr;
@@ -48,9 +46,7 @@ void free_name(PUNICODE_STRING str) {
     }
 }
 
-// --------------------------------------------------------------------------
 // Internal matcher against a name list
-// --------------------------------------------------------------------------
 
 template <size_t N>
 static bool match_name_list(PWCH buffer, const wchar_t* const (&list)[N]) {
@@ -86,17 +82,13 @@ static bool match_by_eprocess(PEPROCESS process,
     return result;
 }
 
-// --------------------------------------------------------------------------
 // Classification queries — by PID
-// --------------------------------------------------------------------------
 
 bool is_target(HANDLE pid) { return match_by_pid(pid, names::target); }
 bool is_hidden(HANDLE pid) { return match_by_pid(pid, names::hidden); }
 bool is_monitored(HANDLE pid) { return match_by_pid(pid, names::monitored); }
 
-// --------------------------------------------------------------------------
 // Classification queries — by PEPROCESS
-// --------------------------------------------------------------------------
 
 bool is_target(PEPROCESS process) {
     return match_by_eprocess(process, names::target);
@@ -108,9 +100,7 @@ bool is_monitored(PEPROCESS process) {
     return match_by_eprocess(process, names::monitored);
 }
 
-// --------------------------------------------------------------------------
 // Classification queries — by raw name buffer
-// --------------------------------------------------------------------------
 
 bool is_target(PWCH buffer) { return match_name_list(buffer, names::target); }
 bool is_hidden(PWCH buffer) { return match_name_list(buffer, names::hidden); }
