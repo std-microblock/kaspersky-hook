@@ -112,8 +112,11 @@ core::VoidResult SsdtHookManager::initialize() {
         return core::err(hvm_result.error());
     }
 
+    ASSERT_TRUE(get_ssdt_count() > 0, KlhkInitFailed);
+    ASSERT_TRUE(get_shadow_ssdt_count() > 0, KlhkInitFailed);
+
     ASSERT_TRUE(hvm_result, HvmInitFailed);
-    ASSERT_TRUE(hvm_result.value() == 0, HvmInitFailed);
+    ASSERT_EQ(hvm_result.value(), 0, HvmInitFailed);
 
     initialized_ = true;
     return core::ok();

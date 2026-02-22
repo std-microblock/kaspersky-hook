@@ -38,6 +38,7 @@ inline const wchar_t* hidden[] = {
     L"windbg.exe",
     L"SystemInformer.exe",
     L"frida.exe",
+    L"Reqable.exe",
 };
 
 inline const wchar_t* monitored[] = {

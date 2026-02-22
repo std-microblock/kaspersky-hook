@@ -38,7 +38,7 @@ core::Result<PUCHAR> load_image_from_file(const wchar_t* path,
         return cache->base;
     }
 
-    ASSERT_TRUE(KeGetCurrentIrql() == PASSIVE_LEVEL, InvalidArgument);
+    ASSERT_EQ(KeGetCurrentIrql(), PASSIVE_LEVEL, InvalidArgument);
 
     UNICODE_STRING file_name{};
     RtlInitUnicodeString(&file_name, path);

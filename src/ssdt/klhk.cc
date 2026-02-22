@@ -24,12 +24,31 @@ bool ssdt::klhk::is_loaded() {
     return core::get_kernel_module_base(L"klhk.sys") != 0;
 }
 
+static void* get_system_routine_address(const wchar_t* routine_name) {
+    UNICODE_STRING routine_unicode;
+    RtlInitUnicodeString(&routine_unicode, routine_name);
+    return MmGetSystemRoutineAddress(&routine_unicode);
+}
+
 core::VoidResult ssdt::klhk::initialize() {
     if (g_initialized) {
         return core::ok();
     }
 
     ASSERT_TRUE(is_loaded(), KlhkNotLoaded);
+
+    // Check Necessary routines with MmGetSystemRoutineAddress
+    // KeSetTargetProcessorDpcEx
+    // KeRegisterProcessorChangeCallback
+    // KeDeregisterProcessorChangeCallback
+    ASSERT_TRUE(get_system_routine_address(L"KeSetTargetProcessorDpcEx"),
+                KlhkInitFailed);
+    ASSERT_TRUE(
+        get_system_routine_address(L"KeRegisterProcessorChangeCallback"),
+        KlhkInitFailed);
+    ASSERT_TRUE(
+        get_system_routine_address(L"KeDeregisterProcessorChangeCallback"),
+        KlhkInitFailed);
 
     // Find klhk's hvm thread object
     auto presult =
@@ -79,14 +98,24 @@ core::VoidResult ssdt::klhk::initialize() {
     g_hvm_status = reinterpret_cast<PNTSTATUS>(
         presult + *reinterpret_cast<int*>(presult + 0x2) + 0x6);
 
-    // Find klhk's service table
+    // Find klhk's service table (g_system_dispatch_array)
     presult =
         core::find_pattern_km(L"klhk.sys", "_hvmcode", "4C8D0D????????4D");
 
     ASSERT_TRUE(presult, KlhkInitFailed);
-
     g_system_dispatch_array = reinterpret_cast<void***>(
         presult + *reinterpret_cast<int*>(presult + 0x3) + 0x7);
+    log("klhk::initialize: g_system_dispatch_array found at %p",
+        g_system_dispatch_array);
+    /*
+    180014000                              void* system_dispatch_array_1 =
+g_system_dispatch_array; 180014007                              int32_t rax_14 =
+*(uint32_t*)((char*)system_dispatch_array_1 + 0x30);
+
+    */
+    log("shadow ssdt count: %u",
+        *reinterpret_cast<unsigned int*>(
+            reinterpret_cast<char*>(g_system_dispatch_array) + 0x30));
 
     // Find number of services (SSDT)
     presult = core::find_pattern_km(L"klhk.sys", ".text", "890D????????8BD3");
@@ -95,6 +124,8 @@ core::VoidResult ssdt::klhk::initialize() {
 
     g_ssdt_service_count = reinterpret_cast<unsigned int*>(
         presult + *reinterpret_cast<int*>(presult + 0x2) + 0x6);
+    log("klhk::initialize: g_ssdt_service_count found at %p, value = %u",
+        g_ssdt_service_count, *g_ssdt_service_count);
 
     // Find number of services (Shadow SSDT)
     presult = core::find_pattern_km(L"klhk.sys", ".text", "8905????????85C0");
@@ -103,6 +134,9 @@ core::VoidResult ssdt::klhk::initialize() {
 
     g_shadow_ssdt_service_count = reinterpret_cast<unsigned int*>(
         presult + *reinterpret_cast<int*>(presult + 0x2) + 0x6);
+    log("klhk::initialize: g_shadow_ssdt_service_count found at %p, value = %u "
+        "(This is the value checked for > 0)",
+        g_shadow_ssdt_service_count, *g_shadow_ssdt_service_count);
 
     // Find provider data
     presult = core::find_pattern_km(L"klhk.sys", ".text", "391D????????75");
@@ -119,8 +153,7 @@ core::VoidResult ssdt::klhk::initialize() {
 core::Result<NTSTATUS> ssdt::klhk::hvm_init() {
     ASSERT_TRUE(g_initialized, NotInitialized);
 
-    ASSERT_TRUE(g_hvm_thread_object && *g_hvm_thread_object,
-                       HvmInitFailed);
+    ASSERT_TRUE(g_hvm_thread_object && *g_hvm_thread_object, HvmInitFailed);
     ASSERT_TRUE(g_hvm_run_requests, HvmInitFailed);
     ASSERT_TRUE(g_hvm_notification_event, HvmInitFailed);
     ASSERT_TRUE(g_hvm_sync_event, HvmInitFailed);

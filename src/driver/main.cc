@@ -187,13 +187,13 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT driver,
         return STATUS_UNSUCCESSFUL;
     }
 
-    // Register anti-debug hooks
-    if (auto res = debugger_hide::register_hooks(); !res) {
-        log("Failed to register debugger hide hooks: %s",
-            core::error_to_string(res.error()));
-        Cleanup();
-        return STATUS_UNSUCCESSFUL;
-    }
+    // // Register anti-debug hooks
+    // if (auto res = debugger_hide::register_hooks(); !res) {
+    //     log("Failed to register debugger hide hooks: %s",
+    //         core::error_to_string(res.error()));
+    //     Cleanup();
+    //     return STATUS_UNSUCCESSFUL;
+    // }
 
     log("BlookDrv loaded successfully. SSDT count: %u, Shadow SSDT count: %u",
         manager.get_ssdt_count(), manager.get_shadow_ssdt_count());
