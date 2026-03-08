@@ -3,9 +3,11 @@
 
 #include "core/core.hpp"
 #include "debugger_hide.hpp"
+#include "debugger_peb_hide.hpp"
 #include "ipc/protocol.hpp"
 #include "ssdt/ssdt.hpp"
 #include "universal_hide.hpp"
+
 
 // Driver globals
 PDEVICE_OBJECT g_device_object = nullptr;
@@ -182,6 +184,13 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT driver,
     // Register hide hooks
     if (auto res = hide::register_hooks(); !res) {
         log("Failed to register hide hooks: %s",
+            core::error_to_string(res.error()));
+        Cleanup();
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    if (auto res = debugger_peb_hide::register_hooks(); !res) {
+        log("Failed to register debugger PEB hide hooks: %s",
             core::error_to_string(res.error()));
         Cleanup();
         return STATUS_UNSUCCESSFUL;
